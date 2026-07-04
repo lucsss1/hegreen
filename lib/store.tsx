@@ -1,0 +1,273 @@
+"use client";
+
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import { supabase } from "./supabase";
+import { fromDB, toDB, type Aposta, type ApostaRow, type Resultado } from "./types";
+import { getBanca, getOfflineBets, setBanca as persistBanca, setOfflineBets } from "./storage";
+import { fmtR } from "./calc";
+
+type SyncStatus = "ok" | "sp" | "err";
+
+export interface CalcTransfer {
+  odd?: string;
+  oddC?: string;
+  prob?: string;
+}
+
+interface AppStoreValue {
+  bets: Aposta[];
+  banca: number;
+  bancaAtual: number;
+  sync: SyncStatus;
+  loadBets: () => Promise<void>;
+  insertBet: (b: Aposta) => Promise<void>;
+  updateBet: (b: Aposta) => Promise<void>;
+  deleteBet: (id: number) => Promise<void>;
+  setBancaValue: (v: number) => void;
+  importBets: (bets: Aposta[], banca: number) => Promise<void>;
+
+  toastMsg: string;
+  toastOn: boolean;
+  toast: (msg: string, duration?: number) => void;
+
+  calcOpen: boolean;
+  openCalc: () => void;
+  closeCalc: () => void;
+
+  bancaSheetOpen: boolean;
+  openBancaSheet: () => void;
+  closeBancaSheet: () => void;
+
+  resolverOpen: boolean;
+  resolvingId: number | null;
+  openResolver: (id: number) => void;
+  closeResolver: () => void;
+  confirmResolver: (resultado: Resultado, oddFech: number | null) => Promise<void>;
+
+  calcTransfer: CalcTransfer | null;
+  setCalcTransfer: (t: CalcTransfer) => void;
+  consumeCalcTransfer: () => CalcTransfer | null;
+}
+
+const AppStoreContext = createContext<AppStoreValue | null>(null);
+
+export function AppStoreProvider({ children }: { children: React.ReactNode }) {
+  const [bets, setBets] = useState<Aposta[]>([]);
+  const [banca, setBancaState] = useState(100);
+  const [sync, setSync] = useState<SyncStatus>("sp");
+  const [toastMsg, setToastMsg] = useState("");
+  const [toastOn, setToastOn] = useState(false);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [calcOpen, setCalcOpen] = useState(false);
+  const [bancaSheetOpen, setBancaSheetOpen] = useState(false);
+  const [resolverOpen, setResolverOpen] = useState(false);
+  const [resolvingId, setResolvingId] = useState<number | null>(null);
+  const [calcTransfer, setCalcTransferState] = useState<CalcTransfer | null>(null);
+
+  useEffect(() => {
+    setBancaState(getBanca());
+  }, []);
+
+  const toast = useCallback((msg: string, duration = 2500) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToastMsg(msg);
+    setToastOn(true);
+    toastTimer.current = setTimeout(() => setToastOn(false), duration);
+  }, []);
+
+  const loadBets = useCallback(async () => {
+    setSync("sp");
+    const { data, error } = await supabase
+      .from("apostas")
+      .select("*")
+      .order("id", { ascending: false });
+    if (error || !data) {
+      setSync("err");
+      toast("Offline — dados locais");
+      setBets(getOfflineBets());
+      return;
+    }
+    setSync("ok");
+    setBets((data as ApostaRow[]).map(fromDB));
+  }, [toast]);
+
+  const insertBet = useCallback(
+    async (b: Aposta) => {
+      setSync("sp");
+      const { error } = await supabase.from("apostas").insert(toDB(b));
+      if (error) {
+        setSync("err");
+        const next = [b, ...getOfflineBets()];
+        setOfflineBets(next);
+        setBets(next);
+        toast("Salvo offline");
+        return;
+      }
+      setSync("ok");
+      await loadBets();
+    },
+    [loadBets, toast]
+  );
+
+  const updateBet = useCallback(
+    async (b: Aposta) => {
+      setSync("sp");
+      const { error } = await supabase.from("apostas").update(toDB(b)).eq("id", b.id);
+      if (error) {
+        setSync("err");
+        toast("Erro ao salvar");
+        return;
+      }
+      setSync("ok");
+      await loadBets();
+    },
+    [loadBets, toast]
+  );
+
+  const deleteBet = useCallback(
+    async (id: number) => {
+      if (typeof window !== "undefined" && !window.confirm("Apagar?")) return;
+      setSync("sp");
+      const { error } = await supabase.from("apostas").delete().eq("id", id);
+      if (error) {
+        setSync("err");
+        toast("Erro");
+        return;
+      }
+      setSync("ok");
+      await loadBets();
+    },
+    [loadBets, toast]
+  );
+
+  const setBancaValue = useCallback((v: number) => {
+    setBancaState(v);
+    persistBanca(v);
+  }, []);
+
+  const importBets = useCallback(
+    async (importedBets: Aposta[], importedBanca: number) => {
+      setSync("sp");
+      const { error } = await supabase.from("apostas").insert(importedBets.map(toDB));
+      if (error) {
+        setSync("err");
+        toast("Erro ao importar");
+        return;
+      }
+      setSync("ok");
+      setBancaState(importedBanca || 100);
+      persistBanca(importedBanca || 100);
+      await loadBets();
+      toast(`✓ ${importedBets.length} importadas`);
+    },
+    [loadBets, toast]
+  );
+
+  useEffect(() => {
+    loadBets();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const resolvedLucro = bets
+    .filter((b) => b.resultado !== "pendente" && b.resultado !== "void")
+    .reduce((s, b) => s + (b.lucro || 0), 0);
+  const bancaAtual = banca + resolvedLucro;
+
+  const openResolver = useCallback((id: number) => {
+    setResolvingId(id);
+    setResolverOpen(true);
+  }, []);
+  const closeResolver = useCallback(() => setResolverOpen(false), []);
+
+  const confirmResolver = useCallback(
+    async (resultado: Resultado, oddFech: number | null) => {
+      const b = bets.find((x) => x.id === resolvingId);
+      if (!b) return;
+      const lucro =
+        resultado === "ganhou"
+          ? b.stakeR * (b.odd - 1)
+          : resultado === "perdeu"
+          ? -b.stakeR
+          : 0;
+      const updated: Aposta = {
+        ...b,
+        resultado,
+        oddFech,
+        lucro: parseFloat(lucro.toFixed(2)),
+      };
+      setResolverOpen(false);
+      await updateBet(updated);
+      toast(
+        resultado === "ganhou"
+          ? "✓ " + fmtR(updated.lucro)
+          : resultado === "perdeu"
+          ? "✕ " + fmtR(updated.lucro)
+          : "⊘ Void"
+      );
+    },
+    [bets, resolvingId, updateBet, toast]
+  );
+
+  const setCalcTransfer = useCallback((t: CalcTransfer) => {
+    setCalcTransferState(t);
+  }, []);
+  const consumeCalcTransfer = useCallback(() => {
+    let val: CalcTransfer | null = null;
+    setCalcTransferState((prev) => {
+      val = prev;
+      return null;
+    });
+    return val;
+  }, []);
+
+  const value: AppStoreValue = {
+    bets,
+    banca,
+    bancaAtual,
+    sync,
+    loadBets,
+    insertBet,
+    updateBet,
+    deleteBet,
+    setBancaValue,
+    importBets,
+
+    toastMsg,
+    toastOn,
+    toast,
+
+    calcOpen,
+    openCalc: () => setCalcOpen(true),
+    closeCalc: () => setCalcOpen(false),
+
+    bancaSheetOpen,
+    openBancaSheet: () => setBancaSheetOpen(true),
+    closeBancaSheet: () => setBancaSheetOpen(false),
+
+    resolverOpen,
+    resolvingId,
+    openResolver,
+    closeResolver,
+    confirmResolver,
+
+    calcTransfer,
+    setCalcTransfer,
+    consumeCalcTransfer,
+  };
+
+  return <AppStoreContext.Provider value={value}>{children}</AppStoreContext.Provider>;
+}
+
+export function useAppStore(): AppStoreValue {
+  const ctx = useContext(AppStoreContext);
+  if (!ctx) throw new Error("useAppStore must be used within AppStoreProvider");
+  return ctx;
+}
