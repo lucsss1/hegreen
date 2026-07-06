@@ -30,7 +30,7 @@ interface AppStoreValue {
   insertBet: (b: Aposta) => Promise<void>;
   updateBet: (b: Aposta) => Promise<void>;
   deleteBet: (id: number) => Promise<void>;
-  setBancaValue: (v: number) => void;
+  setBancaValue: (v: number) => Promise<void>;
   importBets: (bets: Aposta[], banca: number) => Promise<void>;
 
   toastMsg: string;
@@ -72,9 +72,23 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
   const [resolvingId, setResolvingId] = useState<number | null>(null);
   const [calcTransfer, setCalcTransferState] = useState<CalcTransfer | null>(null);
 
-  useEffect(() => {
-    setBancaState(getBanca());
+  const loadBanca = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("config")
+      .select("banca_inicial")
+      .eq("id", 1)
+      .maybeSingle();
+    if (error || !data) {
+      setBancaState(getBanca());
+      return;
+    }
+    setBancaState(data.banca_inicial);
+    persistBanca(data.banca_inicial);
   }, []);
+
+  useEffect(() => {
+    loadBanca();
+  }, [loadBanca]);
 
   const toast = useCallback((msg: string, duration = 2500) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -148,10 +162,21 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     [loadBets, toast]
   );
 
-  const setBancaValue = useCallback((v: number) => {
-    setBancaState(v);
-    persistBanca(v);
-  }, []);
+  const setBancaValue = useCallback(
+    async (v: number) => {
+      setBancaState(v);
+      persistBanca(v);
+      setSync("sp");
+      const { error } = await supabase.from("config").upsert({ id: 1, banca_inicial: v });
+      if (error) {
+        setSync("err");
+        toast("Salvo offline");
+        return;
+      }
+      setSync("ok");
+    },
+    [toast]
+  );
 
   const importBets = useCallback(
     async (importedBets: Aposta[], importedBanca: number) => {
@@ -163,8 +188,10 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       setSync("ok");
-      setBancaState(importedBanca || 100);
-      persistBanca(importedBanca || 100);
+      const banca = importedBanca || 100;
+      setBancaState(banca);
+      persistBanca(banca);
+      await supabase.from("config").upsert({ id: 1, banca_inicial: banca });
       await loadBets();
       toast(`✓ ${importedBets.length} importadas`);
     },
