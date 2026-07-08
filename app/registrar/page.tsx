@@ -41,10 +41,10 @@ export default function RegistrarPage() {
   const [data, setData] = useState(today());
   const [liga, setLiga] = useState("");
   const [jogo, setJogo] = useState("");
-  const [mercado, setMercado] = useState(MERCADO_OPTIONS[0]);
+  const [mercado, setMercado] = useState("");
   const [selecoes, setSelecoes] = useState<Selecao[]>([
-    { jogo: "", mercado: MERCADO_OPTIONS[0] },
-    { jogo: "", mercado: MERCADO_OPTIONS[0] },
+    { jogo: "", mercado: "" },
+    { jogo: "", mercado: "" },
   ]);
   const [odd, setOdd] = useState("");
   const [oddC, setOddC] = useState("");
@@ -57,15 +57,14 @@ export default function RegistrarPage() {
   const [customStakeU, setCustomStakeU] = useState("");
 
   useEffect(() => {
+    if (!calcTransfer) return;
     const t = consumeCalcTransfer();
     if (t) {
       if (t.odd) setOdd(t.odd);
       if (t.oddC) setOddC(t.oddC);
       if (t.prob) setProb(t.prob);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  void calcTransfer;
+  }, [calcTransfer, consumeCalcTransfer]);
 
   const pMkt = tipo === "s" ? calcPMkt(odd, oddC) : null;
   const ev = calcEV(prob, odd);
@@ -77,11 +76,16 @@ export default function RegistrarPage() {
   const adj = pMkt != null && prob ? parseFloat(prob) - pMkt : null;
   const stageColor = stageColors[cls];
 
-  const jogoValido = tipo === "s" ? !!jogo.trim() : !!selecoes[0]?.jogo.trim();
-  const canSave = !!liga.trim() && jogoValido && !!odd && !!prob && ev !== null;
+  const jogoValido =
+    tipo === "s"
+      ? !!jogo.trim()
+      : selecoes.length >= 2 && selecoes.every((s) => s.jogo.trim() && s.mercado.trim());
+  const mercadoValido = tipo === "s" ? !!mercado.trim() : true;
+  const canSave = !!liga.trim() && jogoValido && mercadoValido && !!odd && !!prob && ev !== null;
+  const belowMinEv = ev !== null && ev < 5;
 
   function addSelecao() {
-    setSelecoes((prev) => [...prev, { jogo: "", mercado: MERCADO_OPTIONS[0] }]);
+    setSelecoes((prev) => [...prev, { jogo: "", mercado: "" }]);
   }
   function removeSelecao(i: number) {
     setSelecoes((prev) => prev.filter((_, idx) => idx !== i));
@@ -94,14 +98,14 @@ export default function RegistrarPage() {
     setTipo(t);
     if (t === "m") {
       setSelecoes([
-        { jogo: "", mercado: MERCADO_OPTIONS[0] },
-        { jogo: "", mercado: MERCADO_OPTIONS[0] },
+        { jogo: "", mercado: "" },
+        { jogo: "", mercado: "" },
       ]);
     }
   }
 
   async function saveAposta() {
-    const sel = tipo === "m" ? selecoes.map((m) => `${m.jogo} — ${m.mercado}`).filter((s) => s.trim() !== " —").join("\n") : null;
+    const sel = tipo === "m" ? selecoes.map((m) => `${m.jogo} — ${m.mercado}`).join("\n") : null;
     const bet: Aposta = {
       id: Date.now(),
       data: data || today(),
@@ -382,13 +386,20 @@ export default function RegistrarPage() {
           <input type="text" placeholder="contexto extra…" value={notas} onChange={(e) => setNotas(e.target.value)} />
         </div>
 
+        {belowMinEv && (
+          <div className="font-mono text-[10px] text-lose mt-1 mb-1.5">
+            ⚠ EV abaixo do mínimo recomendado (5%) — ver regras em &quot;Plano&quot;.
+          </div>
+        )}
         <button
           id="btn-save"
-          className="w-full p-[15px] bg-ink text-paper text-sm font-semibold tracking-wide font-mono uppercase transition-opacity disabled:opacity-30 mt-1.5"
+          className={`w-full p-[15px] text-sm font-semibold tracking-wide font-mono uppercase transition-opacity disabled:opacity-30 mt-1.5 ${
+            belowMinEv ? "bg-lose text-paper" : "bg-ink text-paper"
+          }`}
           disabled={!canSave || saving}
           onClick={saveAposta}
         >
-          {saving ? "Salvando…" : "Registrar aposta"}
+          {saving ? "Salvando…" : belowMinEv ? "Registrar mesmo assim" : "Registrar aposta"}
         </button>
       </div>
     </div>
