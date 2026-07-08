@@ -5,21 +5,28 @@ import { useAppStore } from "@/lib/store";
 import type { Resultado } from "@/lib/types";
 import Sheet from "./Sheet";
 
+const OPTIONS: { value: Resultado; label: string }[] = [
+  { value: "ganhou", label: "✓ Ganhou" },
+  { value: "perdeu", label: "✕ Perdeu" },
+  { value: "void", label: "⊘ Void" },
+];
+
 export default function ResolverSheet() {
   const { resolverOpen, resolvingId, closeResolver, confirmResolver, bets } = useAppStore();
-  const [resultado, setResultado] = useState<Resultado>("ganhou");
+  const [resultado, setResultado] = useState<Resultado | null>(null);
   const [oddFech, setOddFech] = useState("");
 
   const bet = bets.find((b) => b.id === resolvingId);
 
   useEffect(() => {
     if (resolverOpen) {
-      setResultado("ganhou");
+      setResultado(null);
       setOddFech("");
     }
   }, [resolverOpen]);
 
   function confirm() {
+    if (!resultado) return;
     confirmResolver(resultado, oddFech ? parseFloat(oddFech) : null);
   }
 
@@ -32,13 +39,24 @@ export default function ResolverSheet() {
 
       <div className="mb-3">
         <label className="block font-mono text-[10px] uppercase tracking-wider text-ink3 mb-1.5">
-          Resultado
+          Resultado *
         </label>
-        <select value={resultado} onChange={(e) => setResultado(e.target.value as Resultado)}>
-          <option value="ganhou">✓ Ganhou</option>
-          <option value="perdeu">✕ Perdeu</option>
-          <option value="void">⊘ Void</option>
-        </select>
+        <div className="grid grid-cols-3 gap-2">
+          {OPTIONS.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              className={`p-3 text-[13px] font-semibold font-mono border transition-colors ${
+                resultado === o.value
+                  ? "border-2 border-ink bg-ink text-paper"
+                  : "border-rule2 bg-paper2 text-ink3"
+              }`}
+              onClick={() => setResultado(o.value)}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div>
@@ -62,7 +80,11 @@ export default function ResolverSheet() {
         >
           Cancelar
         </button>
-        <button className="p-3 bg-ink text-paper font-mono text-sm font-semibold" onClick={confirm}>
+        <button
+          className="p-3 bg-ink text-paper font-mono text-sm font-semibold transition-opacity disabled:opacity-30"
+          disabled={!resultado}
+          onClick={confirm}
+        >
           Confirmar
         </button>
       </div>
